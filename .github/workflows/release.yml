@@ -8,7 +8,8 @@
 #
 # There are no secrets. The job signs in to AWS with GitHub's OIDC token, as a
 # role that may write under engram/ and sign with the release key, and nothing
-# else. AWS_ROLE_ARN, BUCKET and KMS_KEY are repository *variables*, from
+# else. AWS_ROLE_ARN, BUCKET, KMS_KEY and DISTRIBUTION_ID are repository
+# *variables*, from
 # infra's `pkg` output.
 name: Release
 
@@ -63,6 +64,7 @@ jobs:
           done
           bin/engram publish \
             --bucket "${{ vars.BUCKET }}" --kms "${{ vars.KMS_KEY }}" \
+            --cloudfront "${{ vars.DISTRIBUTION_ID }}" \
             --project engram --channel dev --retention 720h \
             --commit "$(git rev-parse HEAD)" \
             --version "$(bin/engram version | cut -d' ' -f2)" \

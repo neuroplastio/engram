@@ -244,6 +244,46 @@ func TestClientBelievesOnlyTheSignature(t *testing.T) {
 	}
 }
 
+// Deleting a build from the store does not stop a cache serving it. Whatever
+// sits in front is told, for a scrap and for an expiry alike, after the files
+// have gone.
+func TestRemovedBuildsArePurgedFromTheCache(t *testing.T) {
+	ctx := context.Background()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	art := filepath.Join(t.TempDir(), "tool")
+	os.WriteFile(art, []byte("x"), 0o644)
+	root := t.TempDir()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	var purged []string
+	p := &Publisher{Store: store.Dir(root), Signer: sshsig.Key(priv), Project: "acme", Channel: "dev",
+		Retention: time.Hour, Now: func() time.Time { return now },
+		Purge: func(_ context.Context, prefix string) error {
+			if _, err := os.Stat(filepath.Join(root, prefix)); !os.IsNotExist(err) {
+				t.Errorf("purged %s while its files were still there", prefix)
+			}
+			purged = append(purged, prefix)
+			return nil
+		}}
+	pub := func(c byte) {
+		t.Helper()
+		if _, err := p.Publish(ctx, Build{Commit: commit(c), Version: "v", Time: now}, []Upload{{Name: "tool", OS: "linux", Arch: "amd64", Local: art}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pub('a')
+	now = now.Add(time.Minute)
+	pub('b')
+	now = now.Add(24 * time.Hour)
+	pub('c') // a was superseded a day ago: it expires
+	if err := p.Scrap(ctx, commit('c'), ReasonSecurity); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"acme/dev/builds/" + commit('a') + "/", "acme/dev/builds/" + commit('c') + "/"}
+	if strings.Join(purged, " ") != strings.Join(want, " ") {
+		t.Errorf("purged %v, want %v", purged, want)
+	}
+}
+
 func TestPublishRefusesArtifactsThatWouldShareAName(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	a, b := filepath.Join(t.TempDir(), "tool"), filepath.Join(t.TempDir(), "tool")

@@ -183,6 +183,11 @@ engram verify --url https://pkg.example.org --project acme --channel dev --signe
   instead, for a dry run. The service must honour conditional writes
   (`If-Match`, `If-None-Match`): that is what makes two concurrent publishers
   safe.
+- **The cache.** `--cloudfront <distribution>` names a CloudFront distribution
+  in front of the bucket. Builds are served as immutable, so a cache goes on
+  serving one after its files are deleted; with this, `scrap` and an expiry
+  purge `builds/<commit>/` as well. Without it, withdrawing a build takes
+  effect only where nobody had fetched it yet.
 - **The key.** `--kms` signs with an Ed25519 key in AWS KMS, which cannot be
   exported — there is no secret to store. `--key-file` signs with an
   unencrypted OpenSSH key instead, for anyone without a KMS.

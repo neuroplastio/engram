@@ -70,13 +70,27 @@ func (c *channelFlags) check() error {
 
 // storeFlags pick where the channel lives: a bucket of any S3-compatible
 // service, or a directory for a dry run.
-type storeFlags struct{ bucket, dir, region, endpoint string }
+type storeFlags struct{ bucket, dir, region, endpoint, cloudfront string }
 
 func (s *storeFlags) add(fs *flag.FlagSet) {
 	fs.StringVar(&s.bucket, "bucket", "", "S3 bucket holding the channels")
 	fs.StringVar(&s.endpoint, "endpoint", "", "S3 endpoint, for a service that is not AWS (R2, MinIO, …)")
 	fs.StringVar(&s.region, "region", "us-east-1", "region of the bucket, and of a KMS key")
 	fs.StringVar(&s.dir, "dir", "", "directory to publish into instead of a bucket (dry run)")
+	fs.StringVar(&s.cloudfront, "cloudfront", "", "CloudFront distribution in front of the bucket: purged of a build when its files go")
+}
+
+// purge is how a cache in front of the store is told a build is gone; nil when
+// there is none to tell.
+func (s *storeFlags) purge() (func(context.Context, string) error, error) {
+	if s.cloudfront == "" {
+		return nil, nil
+	}
+	creds, err := sigv4.FromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return (&store.CloudFront{DistributionID: s.cloudfront, Credentials: creds}).Purge, nil
 }
 
 func (s *storeFlags) open() (store.Store, error) {
@@ -155,7 +169,11 @@ func publish(ctx context.Context, args []string) error {
 		return err
 	}
 
-	p := &engram.Publisher{Store: s, Signer: sg, Project: ch.project, Channel: ch.channel, Retention: *retention}
+	purge, err := st.purge()
+	if err != nil {
+		return err
+	}
+	p := &engram.Publisher{Store: s, Signer: sg, Project: ch.project, Channel: ch.channel, Retention: *retention, Purge: purge}
 	b, err := p.Publish(ctx, engram.Build{Commit: *commit, Version: *version, Time: t, MinEnboot: *minEnboot}, uploads)
 	if errors.Is(err, engram.ErrPublished) {
 		// A re-run of a release workflow. The journal already has it.
@@ -191,7 +209,11 @@ func scrap(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	p := &engram.Publisher{Store: s, Project: ch.project, Channel: ch.channel}
+	purge, err := st.purge()
+	if err != nil {
+		return err
+	}
+	p := &engram.Publisher{Store: s, Project: ch.project, Channel: ch.channel, Purge: purge}
 	if err := p.Scrap(ctx, *commit, *reason); err != nil {
 		return err
 	}

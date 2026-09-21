@@ -138,7 +138,8 @@ anything points at it:
    1, or `If-None-Match: *` for a new channel). Losing the race means starting
    again from step 1.
 5. Write the head.
-6. Delete the files of expired builds.
+6. Delete the files of expired builds, and purge them from any cache in front
+   of the store.
 
 **Retention counts from when a build was superseded**, not from when it was
 published: a build expires once its successor's `time` is older than the
@@ -148,7 +149,14 @@ goes quiet for a year still has a head that resolves.
 Lifetimes are the publisher's to declare, on the objects themselves: `head` and
 `journal` with `Cache-Control: max-age=60`; everything under `builds/` as
 immutable. Nothing under `builds/<commit>/` ever changes — a replaced release
-is a new commit, so a new directory — and no cache is ever invalidated.
+is a new commit, so a new directory — so a publish never invalidates a cache.
+
+**Removing a build does.** A cache that holds an immutable file goes on serving
+it after the file is deleted, and for a build scrapped because it is dangerous
+that defeats the scrap. When a build's files go — scrapped or expired — the
+publisher purges `builds/<commit>/` from whatever cache is in front of the
+store, after deleting them. "Its files are gone" means gone from where clients
+fetch them.
 
 ## Not in version 1
 

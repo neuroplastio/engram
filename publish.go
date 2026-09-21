@@ -38,6 +38,12 @@ type Publisher struct {
 	// that goes quiet keeps a head that resolves.
 	Retention time.Duration
 
+	// Purge, when set, is told about every build directory whose files were
+	// just deleted, so that a cache in front of the store stops serving them.
+	// A build is served as immutable; without this, withdrawing one takes
+	// effect only where nobody had fetched it yet.
+	Purge func(ctx context.Context, prefix string) error
+
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -138,8 +144,8 @@ func (p *Publisher) publishOnce(ctx context.Context, b Build, files []Upload) (B
 	// lifecycle rule should sweep; the reverse order would leave the journal
 	// calling a missing build live.
 	for _, commit := range expired {
-		if err := p.Store.DeletePrefix(ctx, p.key("builds", commit)+"/"); err != nil {
-			return b, fmt.Errorf("engram: published, but could not delete expired build %s: %w", commit, err)
+		if err := p.remove(ctx, commit); err != nil {
+			return b, fmt.Errorf("engram: published, but expired build %s: %w", commit, err)
 		}
 	}
 	return b, nil
@@ -181,8 +187,22 @@ func (p *Publisher) Scrap(ctx context.Context, commit, reason string) error {
 		if err != nil {
 			return err
 		}
-		return p.Store.DeletePrefix(ctx, p.key("builds", commit)+"/")
+		return p.remove(ctx, commit)
 	}
+}
+
+// remove deletes a build's files, then has any cache forget them.
+func (p *Publisher) remove(ctx context.Context, commit string) error {
+	prefix := p.key("builds", commit) + "/"
+	if err := p.Store.DeletePrefix(ctx, prefix); err != nil {
+		return fmt.Errorf("could not delete its files: %w", err)
+	}
+	if p.Purge != nil {
+		if err := p.Purge(ctx, prefix); err != nil {
+			return fmt.Errorf("its files are deleted, but the cache still has them: %w", err)
+		}
+	}
+	return nil
 }
 
 func (p *Publisher) load(ctx context.Context) (*Journal, string, error) {
