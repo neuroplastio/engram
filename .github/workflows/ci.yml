@@ -1,0 +1,25 @@
+# CI: `make check`, the same gate a human runs. ubuntu-latest ships ssh-keygen,
+# so the tests that use the real one as an oracle run here too.
+name: CI
+
+# On main it runs as the first job of release.yml, not on its own.
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: make check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - run: make check

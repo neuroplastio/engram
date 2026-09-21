@@ -1,0 +1,87 @@
+# Release: engram publishes itself, with itself.
+#
+# Every push to main that passes `make check` becomes a build on the `dev`
+# channel of pkg.neuroplast.io/engram/: the publisher and enboot, for
+# every platform, signed by the release key. The binary that does the
+# publishing is the one built from the commit being published — if engram
+# cannot release engram, nothing else should trust it to.
+#
+# There are no secrets. The job signs in to AWS with GitHub's OIDC token, as a
+# role that may write under engram/ and sign with the release key, and nothing
+# else. AWS_ROLE_ARN, BUCKET and KMS_KEY are repository *variables*, from
+# infra's `pkg` output.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: make check
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: publish to engram/dev
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets the job request the OIDC token it signs in to AWS with.
+      id-token: write
+    concurrency:
+      # Never cancel a publishing run. Two at once would be safe — the journal
+      # is written conditionally — but there is no reason to race.
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Reproducible tarballs, and bin/ for this machine.
+      - run: make dist build
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Publish
+        run: |
+          artifacts=()
+          for f in dist/*.tar.gz; do
+            base="$(basename "$f" .tar.gz)"     # enboot_linux_amd64
+            arch="${base##*_}"; rest="${base%_*}"
+            os="${rest##*_}";   name="${rest%_*}"
+            artifacts+=("$name/$os/$arch=$f")
+          done
+          bin/engram publish \
+            --bucket "${{ vars.BUCKET }}" --kms "${{ vars.KMS_KEY }}" \
+            --project engram --channel dev --retention 720h \
+            --commit "$(git rev-parse HEAD)" \
+            --version "$(bin/engram version | cut -d' ' -f2)" \
+            --time "$(git show -s --format=%cI HEAD)" \
+            "${artifacts[@]}"
+
+      # What a client pins, where a person can find it. Not what makes it
+      # trustworthy: a key fetched from the place it vouches for proves
+      # nothing, so anything that matters pins the key in its own source.
+      - name: Publish the public key and the installer
+        run: |
+          bin/engram pubkey --kms "${{ vars.KMS_KEY }}" --identity release@neuroplast.io > allowed_signers
+          aws s3 cp allowed_signers "s3://${{ vars.BUCKET }}/engram/allowed_signers" \
+            --content-type 'text/plain; charset=utf-8' --cache-control 'public, max-age=300'
+          aws s3 cp install.sh "s3://${{ vars.BUCKET }}/engram/install.sh" \
+            --content-type 'text/x-shellscript; charset=utf-8' --cache-control 'public, max-age=300'
+
+      # Read it back the way a stranger would: through the CDN, against the key.
+      - name: Verify what was published
+        run: |
+          bin/engram verify --url https://pkg.neuroplast.io --project engram --channel dev \
+            --signers allowed_signers --commit "$(git rev-parse HEAD)" --fetch
