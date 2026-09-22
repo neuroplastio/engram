@@ -39,6 +39,11 @@ type Store interface {
 	// Get returns the content and a tag identifying this version of it.
 	Get(ctx context.Context, key string) (data []byte, tag string, err error)
 	Put(ctx context.Context, key string, data []byte, opts PutOptions) error
+	// Copy makes dst a copy of src, served with opts — on the server where
+	// the store has one, so that a mirror of a build costs no download.
+	Copy(ctx context.Context, src, dst string, opts PutOptions) error
+	// Delete removes one key. A key that is not there is not an error.
+	Delete(ctx context.Context, key string) error
 	// DeletePrefix removes every key under prefix.
 	DeletePrefix(ctx context.Context, prefix string) error
 }
@@ -74,6 +79,22 @@ func (d Dir) Put(ctx context.Context, key string, data []byte, opts PutOptions) 
 		return err
 	}
 	return os.WriteFile(p, data, 0o644)
+}
+
+func (d Dir) Copy(ctx context.Context, src, dst string, opts PutOptions) error {
+	data, _, err := d.Get(ctx, src)
+	if err != nil {
+		return err
+	}
+	return d.Put(ctx, dst, data, opts)
+}
+
+func (d Dir) Delete(_ context.Context, key string) error {
+	err := os.Remove(d.path(key))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func (d Dir) DeletePrefix(_ context.Context, prefix string) error {

@@ -46,9 +46,11 @@ flowchart LR
         sig["<b>manifest.sig</b><br/>OpenSSH signature"]
         artifacts["artifact files"]
     end
+    latest["<b>latest/</b><br/>a copy of the newest build's files<br/>one URL per artifact, for curl"]
     key(["Ed25519 key<br/>pinned in the client"])
 
     head -- "commit" --> manifest
+    build -. "mirrored" .-> latest
     journal -. "every commit, and what became of it" .-> manifest
     sig -- "signs" --> manifest
     manifest -- "sha256" --> artifacts
@@ -211,6 +213,16 @@ The key is pinned by the caller, never fetched:
     ENGRAM_SIGNERS: release@neuroplast.io namespaces="engram" ssh-ed25519 AAAA…
   run: curl -fsS https://pkg.neuroplast.io/engram/install.sh | sh -s -- engram ./bin
 ```
+
+## Just the newest build
+
+```sh
+curl -fsSLO https://pkg.example.org/acme/dev/latest/acme_linux_amd64.tar.gz
+```
+
+`latest/` is a copy of the newest live build's files — its `manifest` and
+`manifest.sig` included, so the recipe below works on it too. Sixty-second
+cache, like `head`. A program that pins the key should still go through `head`.
 
 ## Checking a release by hand
 

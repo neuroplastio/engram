@@ -258,7 +258,7 @@ func TestRemovedBuildsArePurgedFromTheCache(t *testing.T) {
 	p := &Publisher{Store: store.Dir(root), Signer: sshsig.Key(priv), Project: "acme", Channel: "dev",
 		Retention: time.Hour, Now: func() time.Time { return now },
 		Purge: func(_ context.Context, prefix string) error {
-			if _, err := os.Stat(filepath.Join(root, prefix)); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(root, prefix)); !os.IsNotExist(err) && !strings.HasSuffix(prefix, "/latest/") {
 				t.Errorf("purged %s while its files were still there", prefix)
 			}
 			purged = append(purged, prefix)
@@ -278,7 +278,10 @@ func TestRemovedBuildsArePurgedFromTheCache(t *testing.T) {
 	if err := p.Scrap(ctx, commit('c'), ReasonSecurity); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"acme/dev/builds/" + commit('a') + "/", "acme/dev/builds/" + commit('c') + "/"}
+	// latest/ is purged whenever the newest build changes — and *before* an
+	// expired build's files go, since save comes first.
+	latest := "acme/dev/latest/"
+	want := []string{latest, latest, latest, "acme/dev/builds/" + commit('a') + "/", latest, "acme/dev/builds/" + commit('c') + "/"}
 	if strings.Join(purged, " ") != strings.Join(want, " ") {
 		t.Errorf("purged %v, want %v", purged, want)
 	}
@@ -337,5 +340,77 @@ func TestRetentionNeverExpiresTheNewest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "acme/dev/builds", commit('a'))); !os.IsNotExist(err) {
 		t.Error("expired build's files are still there")
+	}
+}
+
+func TestLatestMirrorsTheNewestBuild(t *testing.T) {
+	ctx := context.Background()
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	dir := t.TempDir()
+	root := t.TempDir()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	p := &Publisher{Store: store.Dir(root), Signer: sshsig.Key(priv), Project: "acme", Channel: "dev",
+		Now: func() time.Time { return now }}
+	pub := func(c byte, name string) {
+		t.Helper()
+		art := filepath.Join(dir, name)
+		os.WriteFile(art, []byte("build "+string(c)), 0o644)
+		if _, err := p.Publish(ctx, Build{Commit: commit(c), Version: "v", Time: now}, []Upload{{Name: "tool", OS: "linux", Arch: "amd64", Local: art}}); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+	}
+	read := func(name string) string {
+		data, err := os.ReadFile(filepath.Join(root, "acme/dev/latest", name))
+		if err != nil {
+			return "<" + err.Error() + ">"
+		}
+		return string(data)
+	}
+	latestIs := func(c byte, name string) {
+		t.Helper()
+		m, err := ParseManifest([]byte(read("manifest")))
+		if err != nil || m.Build.Commit != commit(c) {
+			t.Fatalf("latest/manifest: %v %v, want %s", m, err, commit(c))
+		}
+		if got := read(name); got != "build "+string(c) {
+			t.Fatalf("latest/%s = %q", name, got)
+		}
+		sig, err := os.ReadFile(filepath.Join(root, "acme/dev/builds", commit(c), "manifest.sig"))
+		if err != nil || read("manifest.sig") != string(sig) {
+			t.Fatalf("latest/manifest.sig is not the build's")
+		}
+	}
+
+	pub('a', "tool_linux_amd64")
+	latestIs('a', "tool_linux_amd64")
+	pub('b', "tool_linux_amd64")
+	latestIs('b', "tool_linux_amd64")
+
+	// A build whose files are named differently leaves nothing stale behind.
+	pub('c', "tool-linux-amd64")
+	latestIs('c', "tool-linux-amd64")
+	if got := read("tool_linux_amd64"); !strings.HasPrefix(got, "<") {
+		t.Errorf("stale latest/tool_linux_amd64 = %q", got)
+	}
+
+	// Scrapping the newest moves latest/ back with the head.
+	if err := p.Scrap(ctx, commit('c'), ReasonBroken); err != nil {
+		t.Fatal(err)
+	}
+	latestIs('b', "tool_linux_amd64")
+	if got := read("tool-linux-amd64"); !strings.HasPrefix(got, "<") {
+		t.Errorf("scrapped build's file still in latest/: %q", got)
+	}
+
+	// A channel with nothing live has no latest/.
+	if err := p.Scrap(ctx, commit('b'), ReasonBroken); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Scrap(ctx, commit('a'), ReasonBroken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "acme/dev/latest")); !os.IsNotExist(err) {
+		t.Errorf("latest/ still there with nothing live: %v", err)
 	}
 }

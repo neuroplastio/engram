@@ -239,5 +239,88 @@ func (p *Publisher) save(ctx context.Context, j *Journal, tag string) error {
 	if err != nil {
 		return err
 	}
-	return p.Store.Put(ctx, p.key("head"), head, store.PutOptions{CacheControl: cacheMoving, ContentType: textPlain})
+	if err := p.Store.Put(ctx, p.key("head"), head, store.PutOptions{CacheControl: cacheMoving, ContentType: textPlain}); err != nil {
+		return err
+	}
+	return p.mirror(ctx, j)
+}
+
+// mirror keeps latest/ a copy of the newest live build — its files, then its
+// manifest and signature — so that a channel has one URL per artifact that
+// always names the current build, for a person with curl. It is head
+// resolved: the same 60-second lifetime, the same lack of a signature of its
+// own, and the manifest in it still says which build the files are and what
+// they hash to.
+//
+// Files are copied before the manifest, so a reader who takes the manifest
+// and then a file can at worst find a file newer than the manifest — a hash
+// that does not match, and a retry — never a manifest whose files are not
+// there yet. Nothing is copied when the newest build has not changed: an
+// expiry of an old build leaves latest/ alone.
+func (p *Publisher) mirror(ctx context.Context, j *Journal) error {
+	latest := p.key("latest")
+	var old *Manifest
+	switch data, _, err := p.Store.Get(ctx, path.Join(latest, "manifest")); {
+	case err == nil:
+		old, _ = ParseManifest(data) // unreadable is the same as absent
+	case !errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("engram: latest/: %w", err)
+	}
+
+	b, ok := j.Newest()
+	if !ok {
+		if old == nil {
+			return nil
+		}
+		if err := p.Store.DeletePrefix(ctx, latest+"/"); err != nil {
+			return fmt.Errorf("engram: latest/: %w", err)
+		}
+		return p.purge(ctx, latest+"/")
+	}
+	if old != nil && old.Build.Commit == b.Commit {
+		return nil
+	}
+
+	dir := p.key("builds", b.Commit)
+	data, _, err := p.Store.Get(ctx, path.Join(dir, "manifest"))
+	if err != nil {
+		return fmt.Errorf("engram: latest/: %w", err)
+	}
+	m, err := ParseManifest(data)
+	if err != nil {
+		return fmt.Errorf("engram: latest/: %w", err)
+	}
+	keep := map[string]bool{"manifest": true, "manifest.sig": true}
+	for _, a := range m.Artifacts {
+		keep[a.Path] = true
+		if err := p.Store.Copy(ctx, path.Join(dir, a.Path), path.Join(latest, a.Path), store.PutOptions{CacheControl: cacheMoving}); err != nil {
+			return fmt.Errorf("engram: latest/%s: %w", a.Path, err)
+		}
+	}
+	for _, name := range []string{"manifest.sig", "manifest"} {
+		opts := store.PutOptions{CacheControl: cacheMoving, ContentType: textPlain}
+		if err := p.Store.Copy(ctx, path.Join(dir, name), path.Join(latest, name), opts); err != nil {
+			return fmt.Errorf("engram: latest/%s: %w", name, err)
+		}
+	}
+	if old != nil {
+		for _, a := range old.Artifacts {
+			if !keep[a.Path] {
+				if err := p.Store.Delete(ctx, path.Join(latest, a.Path)); err != nil {
+					return fmt.Errorf("engram: latest/%s: %w", a.Path, err)
+				}
+			}
+		}
+	}
+	return p.purge(ctx, latest+"/")
+}
+
+func (p *Publisher) purge(ctx context.Context, prefix string) error {
+	if p.Purge == nil {
+		return nil
+	}
+	if err := p.Purge(ctx, prefix); err != nil {
+		return fmt.Errorf("engram: %s is written, but the cache still has the old one: %w", prefix, err)
+	}
+	return nil
 }

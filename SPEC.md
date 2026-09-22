@@ -1,6 +1,7 @@
 # engram — specification, version 1
 
-An engram channel is three kinds of file under `<base>/<project>/<channel>/`:
+An engram channel is three kinds of file under `<base>/<project>/<channel>/`,
+and a mirror:
 
     head                     the newest live build — tiny, polled
     journal                  every event since the channel began, oldest first
@@ -8,6 +9,7 @@ An engram channel is three kinds of file under `<base>/<project>/<channel>/`:
       manifest               what one build consists of — immutable, signed
       manifest.sig
       <artifact files>
+    latest/                  a copy of builds/<commit>/ for the newest live build
 
 This document is the contract. The Go package in this repository is its
 reference implementation; where they disagree, the package has a bug.
@@ -80,6 +82,23 @@ The `channel` record gains `seq`, the journal's last sequence when the head was
 written, and `updated`. The `publish` record is the newest live build, byte for
 byte as the journal has it. A channel with no live build has no `publish`
 record.
+
+## `latest/`
+
+`latest/` holds a copy of every file of the newest live build, under the
+same names: the artifacts, `manifest` and `manifest.sig`. It is `head`
+resolved, for a person with `curl` and a URL that must not change:
+`<base>/<project>/<channel>/latest/<artifact>`.
+
+It is served like `head` — a 60-second lifetime, purged from any cache the
+publisher knows of when it changes — and like `head` it is not a thing to
+trust: the `manifest` in it is the build's own, signed as the build's is, and
+says which commit the files are and what they hash to. A client that verifies
+takes `head` and `builds/<commit>/`; a reader of `latest/` that checks hashes
+can, during a publish, find a file newer than the manifest beside it — the
+files are copied first — and should read again.
+
+A channel with no live build has no `latest/`.
 
 ## `manifest`
 

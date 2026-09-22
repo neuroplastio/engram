@@ -127,6 +127,58 @@ func (s *S3) Put(ctx context.Context, key string, data []byte, opts PutOptions) 
 	return apiError(resp)
 }
 
+// Copy is S3's CopyObject: a PUT that names its source. REPLACE makes the
+// copy carry opts rather than the source's headers — a mirror of an
+// immutable file must not be served as immutable.
+func (s *S3) Copy(ctx context.Context, src, dst string, opts PutOptions) error {
+	h := http.Header{}
+	for name, v := range map[string]string{"Cache-Control": opts.CacheControl, "Content-Type": opts.ContentType} {
+		if v != "" {
+			h.Set(name, v)
+		}
+	}
+	segs := strings.Split(src, "/")
+	for i, seg := range segs {
+		segs[i] = sigv4.Escape(seg)
+	}
+	h.Set("x-amz-copy-source", "/"+s.Bucket+"/"+strings.Join(segs, "/"))
+	h.Set("x-amz-metadata-directive", "REPLACE")
+	resp, err := s.do(ctx, http.MethodPut, s.url(dst, nil), nil, h)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return apiError(resp)
+	}
+	// A copy that fails part way answers 200 with an error in the body.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if bytes.Contains(body, []byte("<Error>")) {
+		return fmt.Errorf("s3: copy %s: %s", src, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func (s *S3) Delete(ctx context.Context, key string) error {
+	resp, err := s.do(ctx, http.MethodDelete, s.url(key, nil), nil, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK, http.StatusNotFound:
+		return nil
+	}
+	return apiError(resp)
+}
+
 func (s *S3) DeletePrefix(ctx context.Context, prefix string) error {
 	if !strings.HasSuffix(prefix, "/") {
 		return errors.New("store: a prefix to delete must end in /")
