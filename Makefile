@@ -11,7 +11,11 @@ LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # without taking on anything else. name:module-directory.
 BINARIES  := engram:. enboot:enboot
 MODULES   := . enboot
-PLATFORMS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
+# linux/arm is 32-bit ARMv6 (GOARM below): the one build runs on every
+# Raspberry Pi. Every Linux build is static (no cgo), so it also runs on
+# Android under Termux, which has no glibc.
+PLATFORMS := linux/amd64 linux/arm64 linux/arm darwin/amd64 darwin/arm64
+GOARM     := 6
 
 .PHONY: all check build test fmt dist clean
 
@@ -41,7 +45,7 @@ dist:
 	@for p in $(PLATFORMS); do os=$${p%/*}; arch=$${p#*/}; \
 		for bm in $(BINARIES); do b=$${bm%:*}; m=$${bm#*:}; \
 			stage=$(CURDIR)/dist/.stage/$${b}_$${os}_$${arch}; mkdir -p $$stage; \
-			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -C $$m -trimpath -ldflags "$(LDFLAGS)" -o $$stage/$$b ./cmd/$$b || exit 1; \
+			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch GOARM=$(GOARM) $(GO) build -C $$m -trimpath -ldflags "$(LDFLAGS)" -o $$stage/$$b ./cmd/$$b || exit 1; \
 			tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@$(EPOCH) -cf - -C $$stage $$b \
 				| gzip -n > dist/$${b}_$${os}_$${arch}.tar.gz || exit 1; \
 		done; \

@@ -28,7 +28,7 @@ base="$url/$project/$channel"
 [ -n "${ENGRAM_SIGNERS:-}" ] || { echo "install: ENGRAM_SIGNERS is not set (see the top of this script)" >&2; exit 2; }
 
 case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "install: unsupported OS $(uname -s)" >&2; exit 1 ;; esac
-case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; aarch64 | arm64) arch=arm64 ;; *) echo "install: unsupported machine $(uname -m)" >&2; exit 1 ;; esac
+case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; aarch64 | arm64) arch=arm64 ;; armv6l | armv7l | armv8l) arch=arm ;; *) echo "install: unsupported machine $(uname -m)" >&2; exit 1 ;; esac
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
