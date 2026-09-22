@@ -53,8 +53,15 @@ func Sign(req *http.Request, c Credentials, region, service string, now time.Tim
 		if body, err = io.ReadAll(req.Body); err != nil {
 			return err
 		}
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
+		// An empty body must be NoBody, not an empty reader: Go sends a PUT
+		// with a zero-length reader as Transfer-Encoding: chunked, which S3
+		// refuses as NotImplemented. A copy is such a PUT.
+		req.Body = http.NoBody
+		req.ContentLength = 0
+		if len(body) > 0 {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.ContentLength = int64(len(body))
+		}
 	}
 	payload := hexHash(body)
 	stamp := now.UTC().Format("20060102T150405Z")
