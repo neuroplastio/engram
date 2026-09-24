@@ -140,12 +140,23 @@ func Run(program string, args []string) {
 }
 
 func (r *resident) start(path string, rollback bool) {
+	// Both ends close-on-exec, and made so under ForkLock: the tenant gets
+	// its end as descriptor 3 from ForkExec, which clears the flag on that
+	// copy only. Left inheritable, the original number rode into the tenant
+	// as a second descriptor that Dial never marks — and from there into
+	// every child the tenant starts (observed: a shell in a plexos pane
+	// holding a live line to the resident on descriptor 5).
+	syscall.ForkLock.RLock()
 	sp, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err == nil {
+		syscall.CloseOnExec(sp[0])
+		syscall.CloseOnExec(sp[1])
+	}
+	syscall.ForkLock.RUnlock()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "enboot: socketpair:", err)
 		os.Exit(127)
 	}
-	syscall.CloseOnExec(sp[0])
 
 	// Our own environment, minus anything an enboot above us may have left.
 	var env []string

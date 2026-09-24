@@ -34,10 +34,17 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// child is an ordinary program a tenant starts. It must not be able to tell.
+// child is an ordinary program a tenant starts. It must not be able to tell
+// — on descriptor 3 or on any other: it inherits no socket at all.
 func child() int {
 	_, err := syscall.GetsockoptInt(3, syscall.SOL_SOCKET, syscall.SO_TYPE)
-	fmt.Printf("env=%q dial=%v fd3-is-socket=%v", os.Getenv(envFD), Dial() != nil, err == nil)
+	sockets := 0
+	for fd := 4; fd < 256; fd++ {
+		if _, err := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_TYPE); err == nil {
+			sockets++
+		}
+	}
+	fmt.Printf("env=%q dial=%v fd3-is-socket=%v other-sockets=%d", os.Getenv(envFD), Dial() != nil, err == nil, sockets)
 	return 0
 }
 
@@ -166,7 +173,7 @@ func TestChildrenDoNotInheritTheConnection(t *testing.T) {
 	if strings.HasPrefix(got, "FAIL") || exit != 0 {
 		t.Fatalf("result %q exit %d", got, exit)
 	}
-	if want := `env="" dial=false fd3-is-socket=false`; got != want {
+	if want := `env="" dial=false fd3-is-socket=false other-sockets=0`; got != want {
 		t.Errorf("a child saw %s, want %s", got, want)
 	}
 }
