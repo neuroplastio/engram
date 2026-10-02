@@ -12,7 +12,7 @@ scrap seq=2 commit=1f3e9aa0… time=2026-09-21T08:50:12Z reason=broken
 publish seq=3 commit=a7072af3… version=26.09.21-dev.a7072af time=2026-09-21T09:10:55Z min_enboot=1
 ```
 
-[`SPEC.md`](SPEC.md) is the contract. This repository holds three things built
+[`SPEC.md`](SPEC.md) is the contract. This repository holds four things built
 on it:
 
 | | |
@@ -20,8 +20,10 @@ on it:
 | **the library** — `github.com/neuroplastio/engram` | what a client imports to follow a channel and believe only what a pinned key signed. |
 | **the publisher** — `cmd/engram` | what a release workflow calls: upload to any S3-compatible bucket, sign, record. |
 | **enboot** — [`github.com/neuroplastio/engram/enboot`](enboot/) | what a program embeds to replace itself without losing what it is running. Its own module. |
+| **enlaunch** — [`github.com/neuroplastio/engram/enlaunch`](enlaunch/) | what a program's thin launcher is built from: a binary a package manager can own, which fetches the program from its channel and hands over to it. Its own module. |
 
-**Neither module has any dependencies** — both `go.mod` files require nothing.
+**The root and enboot have no dependencies** — their `go.mod` files require
+nothing, and enlaunch requires only the root.
 S3 and KMS are a handful of HTTPS requests signed by [`sigv4/`](sigv4/), not an
 SDK.
 

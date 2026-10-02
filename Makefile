@@ -7,10 +7,11 @@ EPOCH    := $(shell git show -s --format=%ct HEAD)
 VERSION  ?= $(shell date -u -d @$(EPOCH) +%y.%m.%d)-dev.$(shell git rev-parse --short=7 HEAD)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-# Two modules: the root, and enboot/ — its own so that a program can embed it
-# without taking on anything else. name:module-directory.
+# Three modules: the root; enboot/, its own so that a program can embed it
+# without taking on anything else; and enlaunch/, what a program's launcher is
+# built from. Binaries are name:module-directory.
 BINARIES  := engram:. enboot:enboot
-MODULES   := . enboot
+MODULES   := . enboot enlaunch
 # linux/arm is 32-bit ARMv6 (GOARM below): the one build runs on every
 # Raspberry Pi. Every Linux build is static (no cgo), so it also runs on
 # Android under Termux, which has no glibc.
