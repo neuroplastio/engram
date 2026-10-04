@@ -244,6 +244,45 @@ func TestClientBelievesOnlyTheSignature(t *testing.T) {
 	}
 }
 
+// A private channel refuses with 401, which a client must not mistake for a
+// build that is not live; and with the token, nothing else changes.
+func TestPrivateChannel(t *testing.T) {
+	ctx := context.Background()
+	_, c, root := publishAndServe(t)
+	files := http.FileServer(http.Dir(root))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer s3cret" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="acme"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		files.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c.Base = srv.URL
+
+	for _, token := range []string{"", "wrong"} {
+		c.Token = token
+		_, err := c.Latest(ctx, 0)
+		if !errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrNotLive) {
+			t.Errorf("token %q: %v", token, err)
+		}
+	}
+
+	c.Token = "s3cret"
+	m, err := c.Latest(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := m.Find("acme", "linux", "amd64")
+	if _, err := c.Download(ctx, m, a); err != nil {
+		t.Error(err)
+	}
+	if _, err := c.Manifest(ctx, commit('f')); !errors.Is(err, ErrNotLive) {
+		t.Errorf("unknown commit, with the token: %v", err)
+	}
+}
+
 // Deleting a build from the store does not stop a cache serving it. Whatever
 // sits in front is told, for a scrap and for an expiry alike, after the files
 // have gone.

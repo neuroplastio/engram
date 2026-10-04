@@ -177,6 +177,31 @@ publisher purges `builds/<commit>/` from whatever cache is in front of the
 store, after deleting them. "Its files are gone" means gone from where clients
 fetch them.
 
+## Private channels
+
+A channel can be private: served only to whoever holds a token. Nothing in its
+files says so and nothing about them changes. Who may read a channel is the
+server's to enforce; what to believe is still the signature's.
+
+- A client sends the token on every request for the channel's files, as
+  `Authorization: Bearer <token>`. Never in the URL: a URL ends up in logs,
+  error messages and shell history.
+- A server refusing a request for want of a valid token answers **401**. Not
+  403 and not 404: a client reads those as *no such build* (a private bucket
+  answers 403 for a missing key), and must be able to tell "not live" from
+  "not yours".
+- The whole channel is private: `head` and `journal` name every commit, and
+  `latest/` is a build.
+- **A cache checks the token on every request, before it looks itself up** —
+  in a CDN, a viewer-request hook. A check at the origin runs only on a miss,
+  and would let the first reader with a token open each file to everyone after.
+- A server may also take the token as the password of Basic authentication,
+  for a browser or `curl -u`. A client sends Bearer.
+
+**A token is never a reason to believe.** A build fetched with one is verified
+exactly as one fetched without: the token says who may read the channel, and
+whoever can write its storage can still serve a token holder anything.
+
 ## Not in version 1
 
 - **`expires=` on the head** — guards against a stalled channel being passed

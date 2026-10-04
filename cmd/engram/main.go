@@ -7,6 +7,8 @@
 //	engram pubkey   --kms alias/K [--identity release@example.org]
 //	engram verify   --url https://pkg.example.org --project acme --channel dev \
 //	                --signers allowed_signers [--commit <40 hex>] [--fetch]
+//
+// verify reads a private channel's token from ENGRAM_TOKEN.
 package main
 
 import (
@@ -262,7 +264,9 @@ func verify(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	c := &engram.Client{Base: *url, Project: ch.project, Channel: ch.channel, Keys: keys}
+	// A private channel's token, from the environment: a flag would show it to
+	// every user on the machine, in ps.
+	c := &engram.Client{Base: *url, Project: ch.project, Channel: ch.channel, Keys: keys, Token: os.Getenv("ENGRAM_TOKEN")}
 
 	var m *engram.Manifest
 	if *commit != "" {

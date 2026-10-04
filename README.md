@@ -216,6 +216,22 @@ The key is pinned by the caller, never fetched:
   run: curl -fsS https://pkg.neuroplast.io/engram/install.sh | sh -s -- engram ./bin
 ```
 
+## Private channels
+
+A channel can be served only to whoever holds a token: builds that are not out
+yet. engram does not enforce it — whatever serves the channel does, and answers
+401 without the token ([what it must get right](SPEC.md#private-channels)).
+The client sends it and checks the signature exactly as before.
+
+```go
+c := &engram.Client{Base: "https://pkg.example.org", Project: "acme", Channel: "preview", Keys: pinned, Token: token}
+// engram.ErrUnauthorized without the right one
+```
+
+`engram verify` and `install.sh` read it from `ENGRAM_TOKEN` — the
+environment, never a flag, which would show it in `ps`. By hand:
+`curl -H "Authorization: Bearer $ENGRAM_TOKEN"`.
+
 ## Just the newest build
 
 ```sh

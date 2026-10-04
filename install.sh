@@ -12,6 +12,7 @@
 #   ENGRAM_PROJECT  the project                 (engram)
 #   ENGRAM_CHANNEL  the channel                 (dev)
 #   ENGRAM_COMMIT   a specific build            (the channel's head)
+#   ENGRAM_TOKEN    a private channel's token   (none)
 #
 # ENGRAM_SIGNERS is required, and must come from your own source — a workflow
 # file, a Dockerfile — not from the server this script talks to. A key fetched
@@ -33,6 +34,16 @@ case "$(uname -m)" in x86_64 | amd64) arch=amd64 ;; aarch64 | arm64) arch=arm64 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# get <curl args…> — curl, sending the token if there is one. The header goes
+# in on stdin: on the command line, any user on the machine could read it.
+get() {
+	if [ -n "${ENGRAM_TOKEN:-}" ]; then
+		printf 'Authorization: Bearer %s\n' "$ENGRAM_TOKEN" | curl -fsS -H @- "$@"
+	else
+		curl -fsS "$@"
+	fi
+}
+
 # field <key> — the value of key= on the line on stdin. The whole grammar is a
 # split on spaces and a split on '='.
 field() { tr ' ' '\n' | sed -n "s/^$1=//p" | head -n 1; }
@@ -40,12 +51,14 @@ field() { tr ' ' '\n' | sed -n "s/^$1=//p" | head -n 1; }
 commit="${ENGRAM_COMMIT:-}"
 if [ -z "$commit" ]; then
 	# The head is unsigned: it only says where to look.
-	commit="$(curl -fsS "$base/head" | grep '^publish ' | field commit)"
+	get -o "$tmp/head" "$base/head" ||
+		{ echo "install: cannot read the head of $project/$channel (a private channel needs ENGRAM_TOKEN)" >&2; exit 1; }
+	commit="$(grep '^publish ' "$tmp/head" | field commit)"
 	[ -n "$commit" ] || { echo "install: $project/$channel has no live build" >&2; exit 1; }
 fi
 
-curl -fsS -o "$tmp/manifest" "$base/builds/$commit/manifest"
-curl -fsS -o "$tmp/manifest.sig" "$base/builds/$commit/manifest.sig"
+get -o "$tmp/manifest" "$base/builds/$commit/manifest"
+get -o "$tmp/manifest.sig" "$base/builds/$commit/manifest.sig"
 
 printf '%s\n' "$ENGRAM_SIGNERS" >"$tmp/allowed_signers"
 identity="${ENGRAM_SIGNERS%% *}"
@@ -65,7 +78,7 @@ line="$(grep '^artifact ' "$tmp/manifest" | grep " name=$name " | grep " os=$os 
 path="$(echo "$line" | field path)"
 want="$(echo "$line" | field sha256)"
 
-curl -fsS -o "$tmp/artifact" "$base/builds/$commit/$path"
+get -o "$tmp/artifact" "$base/builds/$commit/$path"
 if command -v sha256sum >/dev/null 2>&1; then
 	got="$(sha256sum "$tmp/artifact" | cut -d' ' -f1)"
 else

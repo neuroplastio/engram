@@ -28,12 +28,19 @@ var ErrNotLive = errors.New("engram: no such build on this channel")
 // has already accepted.
 var ErrRollback = errors.New("engram: refusing to go back to an older build")
 
+// ErrUnauthorized means the channel is private and this client sent no token,
+// or one the server refused.
+var ErrUnauthorized = errors.New("engram: the channel refused access")
+
 // Client reads one channel and believes only what a pinned key has signed.
 type Client struct {
 	Base             string // e.g. https://pkg.neuroplast.io
 	Project, Channel string
 	Keys             []ed25519.PublicKey
 	HTTP             *http.Client // nil means http.DefaultClient
+	// Token is a private channel's: sent as a bearer token on every request.
+	// It decides what the server will serve, never what the client believes.
+	Token string
 }
 
 func (c *Client) url(elem ...string) string {
@@ -44,6 +51,9 @@ func (c *Client) get(ctx context.Context, url string, limit int64) ([]byte, erro
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	hc := c.HTTP
 	if hc == nil {
@@ -58,6 +68,11 @@ func (c *Client) get(ctx context.Context, url string, limit int64) ([]byte, erro
 	// A private bucket behind a CDN answers 403, not 404, for a missing key.
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden:
 		return nil, ErrNotLive
+	// Which is why a private channel refuses with 401.
+	case resp.StatusCode == http.StatusUnauthorized && c.Token == "":
+		return nil, fmt.Errorf("%w: it is private, and no token was given", ErrUnauthorized)
+	case resp.StatusCode == http.StatusUnauthorized:
+		return nil, fmt.Errorf("%w: the token was refused", ErrUnauthorized)
 	case resp.StatusCode != http.StatusOK:
 		return nil, fmt.Errorf("engram: GET %s: %s", url, resp.Status)
 	}
