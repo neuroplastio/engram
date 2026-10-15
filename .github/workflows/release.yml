@@ -38,7 +38,7 @@ jobs:
     env:
       CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'dev' }}
       # dev builds name themselves by commit; a stable build by its day.
-      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      TAG_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     permissions:
       contents: read
       # Lets the job request the OIDC token it signs in to AWS with.
@@ -56,7 +56,7 @@ jobs:
           go-version-file: go.mod
 
       # Reproducible tarballs, and bin/ for this machine.
-      - run: make dist build ${VERSION:+VERSION=$VERSION}
+      - run: make dist build ${TAG_VERSION:+VERSION=$TAG_VERSION}
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
