@@ -180,8 +180,16 @@ engram publish --bucket my-releases --kms alias/release-signing \
 engram scrap  --bucket my-releases --project acme --channel dev --commit <40 hex> --reason broken
 engram pubkey --kms alias/release-signing --identity release@example.org   # an allowed_signers line
 engram verify --url https://pkg.example.org --project acme --channel dev --signers allowed_signers --fetch
+engram verify ... --local dist   # right after publish: no download
 ```
 
+- **Verifying.** `verify` checks the signature, manifest and commit. `--fetch`
+  also downloads every artifact through the server. `--local <dir>` is for the
+  job that just built them: it hashes the files in `<dir>` (named as published)
+  against the signed manifest, then asks the server for each one's HEAD (status,
+  `Content-Length`) and its first and last 64 KiB, which must equal the local
+  file's. A missing artifact, or an object that is not this build's (a stale
+  cache), fails; about 128 KiB an artifact instead of all of it.
 - **Where.** `--bucket` is a bucket of any S3-compatible service; `--endpoint`
   names one that is not AWS (R2, MinIO, …). `--dir` publishes into a directory
   instead, for a dry run. The service must honour conditional writes

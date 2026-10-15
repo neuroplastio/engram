@@ -6,7 +6,11 @@
 //	engram scrap    --bucket B --project acme --channel dev --commit <40 hex> --reason broken
 //	engram pubkey   --kms alias/K [--identity release@example.org]
 //	engram verify   --url https://pkg.example.org --project acme --channel dev \
-//	                --signers allowed_signers [--commit <40 hex>] [--fetch]
+//	                --signers allowed_signers [--commit <40 hex>] [--fetch | --local dist]
+//
+// verify --local reads each artifact from the directory it was built into, by
+// the name it was published under, and asks the server for little more than a
+// HEAD and 128 KiB of it; --fetch downloads the lot.
 //
 // verify reads a private channel's token from ENGRAM_TOKEN.
 package main
@@ -17,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -251,10 +256,14 @@ func verify(ctx context.Context, args []string) error {
 	signers := fs.String("signers", "", "allowed_signers file, or a file of OpenSSH public keys")
 	commit := fs.String("commit", "", "verify this commit instead of the head")
 	fetch := fs.Bool("fetch", false, "also download every artifact and check it")
+	local := fs.String("local", "", "directory of the files just built: check them against the manifest, then read only their first and last 64 KiB back")
 	fs.Parse(args)
 
 	if err := ch.check(); err != nil {
 		return err
+	}
+	if *fetch && *local != "" {
+		return errors.New("--fetch and --local are two ways to check; give one")
 	}
 	data, err := os.ReadFile(*signers)
 	if err != nil {
@@ -280,8 +289,20 @@ func verify(ctx context.Context, args []string) error {
 	fmt.Printf("%s/%s: %s (%s), sequence %d — signature good\n", m.Project, m.Channel, m.Build.Version, m.Build.Commit, m.Build.Seq)
 	for _, a := range m.Artifacts {
 		status := ""
-		if *fetch {
+		switch {
+		case *fetch:
 			if _, err := c.Download(ctx, m, a); err != nil {
+				return err
+			}
+			status = "  ok"
+		case *local != "":
+			// Bytes on the build's side first, so a tampered file is named as
+			// such and not as a CDN fault.
+			data, err := os.ReadFile(filepath.Join(*local, a.Path))
+			if err != nil {
+				return fmt.Errorf("--local: %w", err)
+			}
+			if err := c.Probe(ctx, m, a, data); err != nil {
 				return err
 			}
 			status = "  ok"

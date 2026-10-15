@@ -1,6 +1,7 @@
 package engram
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -47,34 +48,51 @@ func (c *Client) url(elem ...string) string {
 	return strings.TrimRight(c.Base, "/") + "/" + c.Project + "/" + c.Channel + "/" + strings.Join(elem, "/")
 }
 
-func (c *Client) get(ctx context.Context, url string, limit int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// do sends one request; byteRange, if set, is a Range header value.
+func (c *Client) do(ctx context.Context, method, url, byteRange string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	if byteRange != "" {
+		req.Header.Set("Range", byteRange)
+	}
 	hc := c.HTTP
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	resp, err := hc.Do(req)
+	return hc.Do(req)
+}
+
+// statusErr is the error a response's status stands for, nil when it is the
+// success status want.
+func (c *Client) statusErr(resp *http.Response, method, url string, want int) error {
+	switch {
+	// A private bucket behind a CDN answers 403, not 404, for a missing key.
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden:
+		return ErrNotLive
+	// Which is why a private channel refuses with 401.
+	case resp.StatusCode == http.StatusUnauthorized && c.Token == "":
+		return fmt.Errorf("%w: it is private, and no token was given", ErrUnauthorized)
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("%w: the token was refused", ErrUnauthorized)
+	case resp.StatusCode != want:
+		return fmt.Errorf("engram: %s %s: %s", method, url, resp.Status)
+	}
+	return nil
+}
+
+func (c *Client) get(ctx context.Context, url string, limit int64) ([]byte, error) {
+	resp, err := c.do(ctx, http.MethodGet, url, "")
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	switch {
-	// A private bucket behind a CDN answers 403, not 404, for a missing key.
-	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden:
-		return nil, ErrNotLive
-	// Which is why a private channel refuses with 401.
-	case resp.StatusCode == http.StatusUnauthorized && c.Token == "":
-		return nil, fmt.Errorf("%w: it is private, and no token was given", ErrUnauthorized)
-	case resp.StatusCode == http.StatusUnauthorized:
-		return nil, fmt.Errorf("%w: the token was refused", ErrUnauthorized)
-	case resp.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("engram: GET %s: %s", url, resp.Status)
+	if err := c.statusErr(resp, http.MethodGet, url, http.StatusOK); err != nil {
+		return nil, err
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
@@ -157,6 +175,68 @@ func (c *Client) Download(ctx context.Context, m *Manifest, a Artifact) ([]byte,
 		return nil, err
 	}
 	return data, a.Check(data)
+}
+
+// ProbeBytes is how much of each end of an artifact Probe reads. A Go binary's
+// build id sits near the start and its tables near the end, so two builds that
+// differ rarely agree on both.
+const ProbeBytes = 64 << 10
+
+// Probe checks, without downloading the artifact, that the server serves the
+// bytes of local, a file already checked against the manifest: HEAD for the
+// status and Content-Length, then the first and last ProbeBytes by Range,
+// compared with local's. It catches an artifact that is missing and a cache
+// holding another build's object under the same path.
+func (c *Client) Probe(ctx context.Context, m *Manifest, a Artifact, local []byte) error {
+	if err := a.Check(local); err != nil {
+		return err
+	}
+	url := c.url("builds", m.Build.Commit, a.Path)
+	resp, err := c.do(ctx, http.MethodHead, url, "")
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if err := c.statusErr(resp, http.MethodHead, url, http.StatusOK); err != nil {
+		return fmt.Errorf("%s: %w", a.Path, err)
+	}
+	if resp.ContentLength != a.Size {
+		return fmt.Errorf("engram: %s: served with length %d, manifest says %d", a.Path, resp.ContentLength, a.Size)
+	}
+	n := min(a.Size, ProbeBytes)
+	if n == 0 {
+		return nil
+	}
+	for _, at := range []int64{0, a.Size - n} {
+		if err := c.probeRange(ctx, url, a, local, at, n); err != nil {
+			return err
+		}
+		if n == a.Size {
+			break
+		}
+	}
+	return nil
+}
+
+func (c *Client) probeRange(ctx context.Context, url string, a Artifact, local []byte, at, n int64) error {
+	resp, err := c.do(ctx, http.MethodGet, url, fmt.Sprintf("bytes=%d-%d", at, at+n-1))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	// A 200 is a server that ignored the range and is sending the whole file;
+	// stopping here costs a little of it, never all of it.
+	if err := c.statusErr(resp, http.MethodGet, url, http.StatusPartialContent); err != nil {
+		return fmt.Errorf("%s: %w", a.Path, err)
+	}
+	got, err := io.ReadAll(io.LimitReader(resp.Body, n+1))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(got, local[at:at+n]) {
+		return fmt.Errorf("engram: %s: bytes %d-%d are not the published build's", a.Path, at, at+n-1)
+	}
+	return nil
 }
 
 // Journal fetches the journal. It is unsigned: what it says about a build being
