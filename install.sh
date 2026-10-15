@@ -10,9 +10,12 @@
 # name defaults to engram, dir to ./bin. Also read from the environment:
 #   ENGRAM_URL      where channels are served   (https://pkg.neuroplast.io)
 #   ENGRAM_PROJECT  the project                 (engram)
-#   ENGRAM_CHANNEL  the channel                 (dev)
+#   ENGRAM_CHANNEL  the channel                 (stable)
 #   ENGRAM_COMMIT   a specific build            (the channel's head)
 #   ENGRAM_TOKEN    a private channel's token   (none)
+#
+# stable is the builds the maintainer has promoted (a YY.MM.DD tag); dev is
+# every commit of main. Take dev only to try a build before it is promoted.
 #
 # ENGRAM_SIGNERS is required, and must come from your own source — a workflow
 # file, a Dockerfile — not from the server this script talks to. A key fetched
@@ -23,7 +26,7 @@ name="${1:-engram}"
 dir="${2:-./bin}"
 url="${ENGRAM_URL:-https://pkg.neuroplast.io}"
 project="${ENGRAM_PROJECT:-engram}"
-channel="${ENGRAM_CHANNEL:-dev}"
+channel="${ENGRAM_CHANNEL:-stable}"
 base="$url/$project/$channel"
 
 [ -n "${ENGRAM_SIGNERS:-}" ] || { echo "install: ENGRAM_SIGNERS is not set (see the top of this script)" >&2; exit 2; }

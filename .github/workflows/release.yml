@@ -2,8 +2,13 @@
 #
 # Every push to main that passes `make check` becomes a build on the `dev`
 # channel of pkg.neuroplast.io/engram/: the publisher and enboot, for
-# every platform, signed by the release key. The binary that does the
-# publishing is the one built from the commit being published — if engram
+# every platform, signed by the release key. A tag named for its day,
+# YY.MM.DD, on a commit of main cuts the same build to the `stable` channel,
+# which is what install.sh gives out by default: every other project's
+# release installs engram from there, so an engram push cannot change what
+# they publish with until the maintainer tags it. It is a rebuild of that
+# commit, differing from its dev build only in the version it reports. The
+# binary that does the publishing is the one built from the commit being published — if engram
 # cannot release engram, nothing else should trust it to.
 #
 # There are no secrets. The job signs in to AWS with GitHub's OIDC token, as a
@@ -16,6 +21,7 @@ name: Release
 on:
   push:
     branches: [main]
+    tags: ['[0-9][0-9].[0-9][0-9].[0-9][0-9]']
 
 permissions:
   contents: read
@@ -26,9 +32,13 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   publish:
-    name: publish to engram/dev
+    name: publish to engram/${{ github.ref_type == 'tag' && 'stable' || 'dev' }}
     needs: check
     runs-on: ubuntu-latest
+    env:
+      CHANNEL: ${{ github.ref_type == 'tag' && 'stable' || 'dev' }}
+      # dev builds name themselves by commit; a stable build by its day.
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     permissions:
       contents: read
       # Lets the job request the OIDC token it signs in to AWS with.
@@ -46,7 +56,7 @@ jobs:
           go-version-file: go.mod
 
       # Reproducible tarballs, and bin/ for this machine.
-      - run: make dist build
+      - run: make dist build ${VERSION:+VERSION=$VERSION}
 
       - uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -65,7 +75,7 @@ jobs:
           bin/engram publish \
             --bucket "${{ vars.BUCKET }}" --kms "${{ vars.KMS_KEY }}" \
             --cloudfront "${{ vars.DISTRIBUTION_ID }}" \
-            --project engram --channel dev --retention 720h \
+            --project engram --channel "$CHANNEL" --retention 720h \
             --commit "$(git rev-parse HEAD)" \
             --version "$(bin/engram version | cut -d' ' -f2)" \
             --time "$(git show -s --format=%cI HEAD)" \
@@ -74,16 +84,21 @@ jobs:
       # What a client pins, where a person can find it. Not what makes it
       # trustworthy: a key fetched from the place it vouches for proves
       # nothing, so anything that matters pins the key in its own source.
+      #
+      # The installer goes up with a stable release only: it is the one URL
+      # every project installs through, so it moves when a build is promoted,
+      # not on every push.
       - name: Publish the public key and the installer
         run: |
           bin/engram pubkey --kms "${{ vars.KMS_KEY }}" --identity release@neuroplast.io > allowed_signers
           aws s3 cp allowed_signers "s3://${{ vars.BUCKET }}/engram/allowed_signers" \
             --content-type 'text/plain; charset=utf-8' --cache-control 'public, max-age=300'
+          [ "$CHANNEL" = stable ] || exit 0
           aws s3 cp install.sh "s3://${{ vars.BUCKET }}/engram/install.sh" \
             --content-type 'text/x-shellscript; charset=utf-8' --cache-control 'public, max-age=300'
 
       # Read it back the way a stranger would: through the CDN, against the key.
       - name: Verify what was published
         run: |
-          bin/engram verify --url https://pkg.neuroplast.io --project engram --channel dev \
-            --signers allowed_signers --commit "$(git rev-parse HEAD)" --fetch
+          bin/engram verify --url https://pkg.neuroplast.io --project engram --channel "$CHANNEL" \
+            --signers allowed_signers --commit "$(git rev-parse HEAD)" --local dist

@@ -215,7 +215,12 @@ without doing anything, so a release workflow can be retried.
 
 [`install.sh`](install.sh) installs a binary from a channel with `curl`,
 `ssh-keygen`, `sha256sum` and `tar` — you do not need engram to check engram.
-The key is pinned by the caller, never fetched:
+The key is pinned by the caller, never fetched. It installs from the `stable`
+channel unless `ENGRAM_CHANNEL=dev` says otherwise: `dev` gets a build for every
+commit of main, `stable` only the ones the maintainer promotes, by pushing a tag
+named for its day (`26.10.15`) on a commit of main. The tag's release publishes
+that commit to `stable`, versioned by the tag, and replaces the installer —
+which is why a push to main cannot change what other projects release with.
 
 ```yaml
 - name: Install engram
